@@ -1,3 +1,6 @@
 .DS_Store
 *.test
 *.out
+*.key
+*.cert
+/certs

@@ -1,79 +1,83 @@
-package main
+package ptproxy
 
 import (
-	"io"
+	"log"
 	"net"
-	"os"
-	"sync"
+
+	"pth3/internal/quictool"
 
 	pt "git.torproject.org/pluggable-transports/goptlib.git"
+	"github.com/lucas-clemente/quic-go"
 )
 
 var ptClientInfo pt.ClientInfo
 
-func clientCopyLoop(a, b net.Conn) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		io.Copy(b, a)
-		wg.Done()
-	}()
-	go func() {
-		io.Copy(a, b)
-		wg.Done()
-	}()
-
-	wg.Wait()
+type PTClient struct {
+	listeners *[]PTListener
 }
 
-func cHandler(conn *pt.SocksConn) error {
+func (p *PTClient) Wait() {
+	ptWait(*p.listeners)
+}
+
+func cHandler(conn *pt.SocksConn, client *quictool.QuicClient) error {
 	defer conn.Close()
-	remote, err := net.Dial("tcp", conn.Req.Target)
-	if err != nil {
-		conn.Reject()
+
+	if err := client.DialAddr(conn.Req.Target); err != nil {
 		return err
 	}
-	defer remote.Close()
-	err = conn.Grant(remote.RemoteAddr().(*net.TCPAddr))
+
+	stream, err := (*client.Conn).OpenStream()
 	if err != nil {
 		return err
 	}
 
-	clientCopyLoop(conn, remote)
+	quit := make(chan bool)
+	errChan := make(chan error)
 
-	return nil
+	go S5ToH3(conn.Conn, stream, quit, errChan)
+	go H3ToS5(stream, conn.Conn, quit, errChan)
+
+	err = <-errChan
+	quit <- true
+	return err
 }
 
-func cAcceptLoop(ln *pt.SocksListener) error {
+func cAcceptLoop(ln *pt.SocksListener, client *quictool.QuicClient) error {
 	defer ln.Close()
 	for {
 		conn, err := ln.AcceptSocks()
 		if err != nil {
-			// e.Temporary()
 			if e, ok := err.(net.Error); ok && e.Timeout() {
 				continue
 			}
 			return err
 		}
-		go cHandler(conn)
+		go cHandler(conn, client)
+		// go cHandler2(conn)
 	}
 }
 
-func ClientStart() []net.Listener {
+func GetClient(certPath string) *PTClient {
 	var err error
+
+	client, err := quictool.GetQuicClient(certPath)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	ptClientInfo, err = pt.ClientSetup(nil)
 	if err != nil {
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
 	if ptClientInfo.ProxyURL != nil {
-		pt.ProxyError("proxy is not supported")
-		os.Exit(1)
+		msg := "proxy is not supported"
+		pt.ProxyError(msg)
+		log.Fatal(msg)
 	}
 
-	listeners := make([]net.Listener, 0)
+	listeners := make([]PTListener, 0)
 	for _, methodName := range ptClientInfo.MethodNames {
 		switch methodName {
 		case ptName:
@@ -82,7 +86,7 @@ func ClientStart() []net.Listener {
 				pt.CmethodError(methodName, err.Error())
 				break
 			}
-			go cAcceptLoop(ln)
+			go cAcceptLoop(ln, client)
 			pt.Cmethod(methodName, ln.Version(), ln.Addr())
 			listeners = append(listeners, ln)
 		default:
@@ -90,5 +94,60 @@ func ClientStart() []net.Listener {
 		}
 	}
 	pt.CmethodsDone()
-	return listeners
+	return &PTClient{
+		listeners: &listeners,
+	}
+}
+
+func S5ToH3(
+	conn net.Conn,
+	stream quic.Stream,
+	quit <-chan bool,
+	errChan chan<- error,
+) {
+	buff := make([]byte, 1024)
+	var size int
+	var err error
+	for {
+		select {
+		case <-quit:
+			return
+		default:
+			if size, err = conn.Read(buff); err != nil {
+				errChan <- err
+				return
+			}
+			log.Println("got data ", string(buff[:size]))
+			if _, err = stream.Write(buff[:size]); err != nil {
+				errChan <- err
+				return
+			}
+		}
+	}
+}
+
+func H3ToS5(
+	stream quic.Stream,
+	conn net.Conn,
+	quit <-chan bool,
+	errChan chan<- error,
+) {
+	buff := make([]byte, 1024)
+	var size int
+	var err error
+	for {
+		select {
+		case <-quit:
+			return
+		default:
+			if size, err = stream.Read(buff); err != nil {
+				errChan <- err
+				return
+			}
+			if _, err = conn.Write(buff[:size]); err != nil {
+				errChan <- err
+				return
+			}
+		}
+	}
 }

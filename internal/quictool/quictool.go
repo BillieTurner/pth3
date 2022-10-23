@@ -34,6 +34,7 @@ func GetQuicClient(certPath string) (*QuicClient, error) {
 	}
 
 	tlsConf := tls.Config{
+		ServerName:         "127.0.0.1:9999",
 		RootCAs:            pool,
 		InsecureSkipVerify: false,
 		NextProtos:         []string{alpn},
@@ -96,48 +97,3 @@ func GetQuicServer(
 	}, nil
 	// return listener, nil
 }
-
-// func Temp() error {
-// 	localCertFile := "certs/test.cert"
-// 	// Read in the cert file
-// 	cert, err := os.ReadFile(localCertFile)
-// 	if err != nil {
-// 		log.Fatalf("Failed to append %q to RootCAs: %v", localCertFile, err)
-// 	}
-// 	fmt.Println("cert ", cert)
-// 	pool := x509.NewCertPool()
-// 	pool.AppendCertsFromPEM(cert)
-
-// 	tlsConf := &tls.Config{
-// 		RootCAs:            pool,
-// 		InsecureSkipVerify: false,
-// 		NextProtos:         []string{"h3"},
-// 		// NextProtos:         []string{"quic-echo-example"},
-// 	}
-// 	fmt.Println("tls", tlsConf)
-// 	addr := "localhost:4242"
-// 	conn, err := quic.DialAddr(addr, tlsConf, nil)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	stream, err := conn.OpenStreamSync(context.Background())
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	message := "foobar"
-// 	fmt.Printf("Client: Sending '%s'\n", message)
-// 	_, err = stream.Write([]byte(message))
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	buf := make([]byte, len(message))
-// 	_, err = io.ReadFull(stream, buf)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	fmt.Printf("Client: Got '%s'\n", buf)
-// 	return nil
-// }

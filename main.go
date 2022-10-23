@@ -14,7 +14,8 @@ func main() {
 	isGenCert := flag.Bool("createCert", false, "generate cert")
 	certPath := flag.String("cert", "", "cert file path")
 	keyPath := flag.String("key", "", "key file path")
-	serverAddr := flag.String("serverAddr", "", "server address")
+	folderPath := flag.String("folder", "", "folder for new cert")
+	// serverAddr := flag.String("serverAddr", "", "server address")
 	flag.Parse()
 
 	// logFile, err := os.OpenFile(
@@ -31,6 +32,14 @@ func main() {
 	// log.Println("cmd ", *isClient, *isServer, *certPath, *isGenCert, *keyPath)
 	if *isGenCert {
 		// generate certs
+		fi, err := os.Stat(*folderPath)
+		if err != nil {
+			log.Fatal("can't find path", err)
+		}
+		if !fi.Mode().IsDir() {
+			log.Fatal("can't find path", err)
+		}
+		pth3.GenerateTLSConfig(folderPath)
 		return
 	}
 
@@ -44,7 +53,7 @@ func main() {
 		if _, err := os.Stat(*keyPath); err != nil {
 			log.Fatal("can't find key file", err)
 		}
-		server := pth3.GetServer(*certPath, *keyPath, *serverAddr)
+		server := pth3.GetServer(*certPath, *keyPath)
 		server.Wait()
 	}
 }

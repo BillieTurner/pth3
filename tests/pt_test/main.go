@@ -21,33 +21,25 @@ func main() {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	clientS5PortChan := make(chan string)
+
 	go func() {
 		startServer()
 		wg.Done()
 	}()
 	go func() {
-		startClient()
+		startClient(clientS5PortChan)
 		wg.Done()
 	}()
+
+	clientS5Port := <-clientS5PortChan
+	fmt.Println("clientS5Port ", clientS5Port)
+	// handleRequst(&clientS5Port)
+
 	wg.Wait()
-
-	// transport := &http.Transport{
-	// 	Proxy:               nil,
-	// 	Dial:                dialer.Dial,
-	// 	TLSHandshakeTimeout: 10 * time.Second,
-	// }
-
-	// client := &http.Client{Transport: transport}
-	// client.Get()
-
-	// cmd := exec.Command("../build/pth3 -client -cert=../certs/test.cert")
-	// err := cmd.Run()
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
 }
 
-func handleOutput(bs []byte) {
+func handleOutput(bs []byte, portCh chan<- string) {
 	// s := strings.TrimSuffix(string(bs), "\n")
 	lines := strings.Split(string(bs), "\n")
 	for _, line := range lines {
@@ -55,14 +47,15 @@ func handleOutput(bs []byte) {
 		switch args[0] {
 		case "CMETHOD":
 			addr := args[3]
+			portCh <- addr
 			// handleS5Conn(&addr)
-			handleRequst(&addr)
+			// handleRequst(&addr)
 		}
 	}
 }
 
 func handleRequst(addr *string) {
-	proxyUrl, err := url.Parse(fmt.Sprintf("socks5://%s", *addr))
+	proxyUrl, err := url.Parse(fmt.Sprintf("socks://%s", *addr))
 	// proxyUrl, err := url.Parse(*addr)
 	if err != nil {
 		panic(err)
@@ -98,7 +91,7 @@ func handleS5Conn(addr *string) {
 	}
 }
 
-func startClient() {
+func startClient(portCh chan<- string) {
 	cmds := strings.Split(
 		"go run ../../main.go -client -cert=../../certs/test.cert",
 		" ",
@@ -127,7 +120,7 @@ func startClient() {
 				return
 				// break
 			}
-			go handleOutput(buf[:size])
+			go handleOutput(buf[:size], portCh)
 			fmt.Println(
 				"client: ",
 				strings.TrimSuffix(string(buf[:size]), "\n"),
@@ -140,10 +133,7 @@ func startClient() {
 
 func startServer() {
 	cmds := strings.Split(
-		fmt.Sprintf(
-			"go run ../../main.go -server -cert=../../certs/test.cert -key=../../certs/test.key -serverAddr=%s",
-			serverAddr,
-		),
+		"go run ../../main.go -server -cert=../../certs/test.cert -key=../../certs/test.key",
 		" ",
 	)
 	cmd := exec.Command(cmds[0], cmds[1:]...)
@@ -183,29 +173,30 @@ func startServer() {
 	cmd.Wait()
 }
 
-func getS5Conn(addr *string) (*net.Conn, error) {
+func getS5Conn(addr1 *string, addr2 *string) error {
 	// addr1 := "127.0.0.1:55555"
 	// addr2 := "127.0.0.1:0"
 	dialer, err := proxy.SOCKS5(
 		"tcp",
-		*addr,
+		*addr1,
 		nil,
 		&net.Dialer{
 			Timeout:   30 * time.Second,
 			KeepAlive: 30 * time.Second,
 		})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	// conn, err := dialer.Dial("tcp", "127.0.0.1:5555")
-	conn, err := dialer.Dial("tcp", *addr)
+	conn, err := dialer.Dial("tcp", *addr2)
 	if err != nil {
 		// fmt.Println(err)
-		return nil, err
+		return err
 	}
-	return &conn, err
-	// _, err = conn.Write([]byte("foobar"))
-	// if err != nil {
-	// 	fmt.Println(err)
-	// }
+	// return &conn, err
+	_, err = conn.Write([]byte("foobar"))
+	if err != nil {
+		return err
+	}
+	return nil
 }

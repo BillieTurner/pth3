@@ -60,7 +60,7 @@ func handleClient(connection *pt.SocksConn) {
 		// that we can inspect the certificate from the server and terminate
 		// the connection if it doesn't match our pin.
 		InsecureSkipVerify: true,
-		NextProtos:         []string{"h3"},
+		NextProtos:         []string{pthelper.ALPN},
 	}
 
 	log.Printf("Connecting to %s", connection.Req.Target)
@@ -140,7 +140,7 @@ func handleClient(connection *pt.SocksConn) {
 		return
 	}
 
-	// FIXME: Figure out why Grant() takes an net.TCPAddr, but ignores it?
+	// FIXME(ahf): Figure out why Grant() takes an net.TCPAddr, but ignores it?
 	err = connection.Grant(nil)
 
 	if err != nil {
@@ -149,6 +149,7 @@ func handleClient(connection *pt.SocksConn) {
 	}
 
 	log.Printf("Granting session with %s", session.RemoteAddr())
+	// copyLoop(stream, connection)
 	pthelper.CopyLoop(stream, connection)
 }
 
@@ -164,6 +165,7 @@ func acceptLoop(listener *pt.SocksListener) {
 			// if ok && netErr.Temporary() {
 			// 	continue
 			// }
+
 			return
 		}
 
@@ -206,7 +208,7 @@ func main() {
 	listeners := make([]net.Listener, 0)
 
 	for _, methodName := range clientInfo.MethodNames {
-		if methodName == "quic" {
+		if methodName == pthelper.PT_NAME {
 			listener, err := pt.ListenSocks("tcp", "127.0.0.1:0")
 
 			if err != nil {

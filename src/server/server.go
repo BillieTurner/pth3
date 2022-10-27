@@ -6,10 +6,11 @@ import (
 	"flag"
 	"log"
 	"os"
-	"pth3/internal/pthelper"
 
 	pt "git.torproject.org/pluggable-transports/goptlib.git"
 	quic "github.com/lucas-clemente/quic-go"
+
+	pthelper "pth3/internal/pthelper"
 )
 
 var handlerChan = make(chan int)
@@ -50,6 +51,7 @@ func handleSession(session quic.Connection, serverInfo *pt.ServerInfo) {
 
 	defer or.Close()
 
+	// copyLoop(stream, or)
 	pthelper.CopyLoop(stream, or)
 }
 
@@ -85,7 +87,6 @@ func main() {
 		log.SetOutput(file)
 		defer file.Close()
 	}
-	log.Println("srat pt. 01")
 
 	serverInfo, err := pt.ServerSetup(nil)
 
@@ -103,13 +104,13 @@ func main() {
 
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{certificate},
-		NextProtos:   []string{"h3"},
+		NextProtos:   []string{pthelper.ALPN},
 	}
 
 	listeners := make([]quic.Listener, 0)
 
 	for _, bindAddr := range serverInfo.Bindaddrs {
-		if bindAddr.MethodName == "quic" {
+		if bindAddr.MethodName == pthelper.PT_NAME {
 			listener, err := quic.ListenAddr(
 				bindAddr.Addr.String(),
 				tlsConfig,

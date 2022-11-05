@@ -33,6 +33,8 @@ var publicKeyPin = flag.String(
 	"SHA2-256 pin of the server public key, encoded in hex.",
 )
 
+var hmacKey = flag.String("hmac-key", "", "hmac key")
+
 func matched(b bool) string {
 	if b {
 		return "matched pinned value"
@@ -140,7 +142,7 @@ func handleClient(connection *pt.SocksConn) {
 		return
 	}
 
-	// FIXME(ahf): Figure out why Grant() takes an net.TCPAddr, but ignores it?
+	// FIXME: Figure out why Grant() takes an net.TCPAddr, but ignores it?
 	err = connection.Grant(nil)
 
 	if err != nil {
@@ -150,7 +152,8 @@ func handleClient(connection *pt.SocksConn) {
 
 	log.Printf("Granting session with %s", session.RemoteAddr())
 	// copyLoop(stream, connection)
-	pthelper.CopyLoop(stream, connection)
+	key, _ := hex.DecodeString(*hmacKey)
+	pthelper.CopyLoop(stream, connection, key)
 }
 
 func acceptLoop(listener *pt.SocksListener) {
@@ -193,6 +196,9 @@ func main() {
 
 	if *publicKeyPin == "" && *certificatePin == "" {
 		log.Fatalf("Certificate and/or public key pin missing.")
+	}
+	if *hmacKey == "" {
+		log.Fatalf("hmac key missing.")
 	}
 
 	clientInfo, err := pt.ClientSetup(nil)

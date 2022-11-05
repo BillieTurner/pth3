@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/hex"
 	"flag"
 	"log"
 	"os"
@@ -22,6 +23,7 @@ var certificatePath = flag.String(
 )
 var keyPath = flag.String("key", "", "Path to TLS private key.")
 var logFile = flag.String("log-file", "", "Path to log file.")
+var hmacKey = flag.String("hmac-key", "", "hmac key")
 
 func handleSession(session quic.Connection, serverInfo *pt.ServerInfo) {
 	log.Printf("Opened Quic session with %s", session.RemoteAddr())
@@ -52,7 +54,8 @@ func handleSession(session quic.Connection, serverInfo *pt.ServerInfo) {
 	defer or.Close()
 
 	// copyLoop(stream, or)
-	pthelper.CopyLoop(stream, or)
+	key, _ := hex.DecodeString(*hmacKey)
+	pthelper.CopyLoop(stream, or, key)
 }
 
 func acceptLoop(listener quic.Listener, serverInfo *pt.ServerInfo) {
@@ -100,6 +103,9 @@ func main() {
 
 	if err != nil {
 		log.Fatalf("Unable to load TLS certificates: %s", err)
+	}
+	if *hmacKey == "" {
+		log.Fatalf("hmac key missing.")
 	}
 
 	tlsConfig := &tls.Config{

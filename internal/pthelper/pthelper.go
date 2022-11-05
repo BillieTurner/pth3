@@ -1,8 +1,11 @@
 package pthelper
 
 import (
+	"crypto/hmac"
+	"crypto/sha1"
 	"encoding/binary"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"os/signal"
@@ -18,6 +21,7 @@ type ListenerCloser interface {
 
 const PT_NAME = "pth3"
 const ALPN = "h3"
+const CHUNK_SIZE = 512
 
 func PtWait[T ListenerCloser](
 	listeners []T,
@@ -49,27 +53,104 @@ func PtWait[T ListenerCloser](
 	}
 }
 
-func unpack(data []byte) [][]byte {
-	rst := make([][]byte, 0)
-	for len(data) != 0 {
-		dlen := binary.BigEndian.Uint32(data[:4])
-		msg := data[8 : dlen+8]
-		rst = append(rst, msg)
-		data = data[dlen+8:]
+func chunkSlice(slice []byte, chunkSize int) [][]byte {
+	var chunks [][]byte
+	for i := 0; i < len(slice); i += chunkSize {
+		end := i + chunkSize
+		if end > len(slice) {
+			end = len(slice)
+		}
+		chunks = append(chunks, slice[i:end])
 	}
-	return rst
+	return chunks
 }
 
-func pack(msg []byte) []byte {
+func getSign(data []byte, key []byte) []byte {
+	mac := hmac.New(sha1.New, key)
+	mac.Write(data)
+	expectedMAC := mac.Sum(nil)
+	return expectedMAC
+}
+
+func checkSign(data []byte, sign []byte, key []byte) bool {
+	mac := hmac.New(sha1.New, key)
+	mac.Write(data)
+	expectedMAC := mac.Sum(nil)
+	return hmac.Equal(sign, expectedMAC)
+}
+
+func addHeader(msg []byte, sign []byte, isPadding bool) []byte {
 	bs := make([]byte, 4)
 	binary.BigEndian.PutUint32(bs, uint32(len(msg)))
-	extraData := []byte("0000")
+	extraData := []byte{0b0, 0b0}
+	if isPadding {
+		extraData = []byte{0b1, 0b0}
+	}
 	data := append(bs, extraData...)
+	data = append(data, sign...)
 	data = append(data, msg...)
 	return data
 }
 
-func CopyLoop(stream quic.Stream, or net.Conn) {
+func genPaddingChunk() []byte {
+	bs := make([]byte, 100)
+	return bs
+}
+
+func isPaddingChunk(bs []byte) bool {
+	return bs[0]&0b1 == 1
+}
+
+func pack(bs []byte, size int, key []byte) []byte {
+	chunks := chunkSlice(bs, size)
+	var rst []byte
+	for _, chunk := range chunks {
+		sign := getSign(chunk, key)
+		c := addHeader(chunk, sign, false)
+		rst = append(rst, c...)
+
+		if rand.Intn(100) < 30 {
+			padding := genPaddingChunk()
+			sign := getSign(padding, key)
+			c := addHeader(padding, sign, true)
+			rst = append(rst, c...)
+		}
+	}
+	return rst
+}
+
+func unpack(data []byte, chunkSize int, key []byte) ([]byte, []byte) {
+	rst := make([]byte, 0)
+	headerSize := 26
+	leftOver := make([]byte, 0)
+	// [4 size] [2 config] [20 sign] [* data]
+	for len(data) != 0 {
+		if len(data) < headerSize {
+			leftOver = data
+			break
+		}
+		dlen := int(binary.BigEndian.Uint32(data[:4]))
+		if dlen > chunkSize {
+			break
+		}
+		sign := data[6:headerSize]
+		if len(data) < dlen+headerSize {
+			leftOver = data
+			break
+		}
+		msg := data[headerSize : dlen+headerSize]
+		if !checkSign(msg, sign, key) {
+			break
+		}
+		if !isPaddingChunk(data[4:6]) {
+			rst = append(rst, msg...)
+		}
+		data = data[dlen+headerSize:]
+	}
+	return rst, leftOver
+}
+
+func CopyLoop(stream quic.Stream, or net.Conn, key []byte) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -79,6 +160,7 @@ func CopyLoop(stream quic.Stream, or net.Conn) {
 	go func() {
 		// io.Copy(or, stream)
 		buf := make([]byte, buffSize)
+		leftOver := make([]byte, 0)
 		for {
 			size, err := stream.Read(buf)
 			if err != nil {
@@ -86,26 +168,14 @@ func CopyLoop(stream quic.Stream, or net.Conn) {
 				break
 			}
 
-			_, err = or.Write(buf[:size])
+			data := append(leftOver, buf[:size]...)
+			data, leftOver = unpack(data, CHUNK_SIZE, key)
+
+			_, err = or.Write(data)
 			if err != nil {
 				log.Println("OR write error ", err)
 				break
 			}
-
-			// msgs := unpack(buf[:size])
-			// breakLoop := false
-			// for _, msg := range msgs {
-			// 	log.Println("rec: ", len(msg))
-			// 	_, err = or.Write(msg)
-			// 	if err != nil {
-			// 		breakLoop = true
-			// 		log.Println("err ", err)
-			// 		break
-			// 	}
-			// }
-			// if breakLoop {
-			// 	break
-			// }
 		}
 		wg.Done()
 	}()
@@ -121,8 +191,7 @@ func CopyLoop(stream quic.Stream, or net.Conn) {
 				break
 			}
 
-			// data := pack(buf[:size])
-			data := buf[:size]
+			data := pack(buf[:size], CHUNK_SIZE, key)
 			_, err = stream.Write(data)
 			if err != nil {
 				log.Println("stream write error ", err)

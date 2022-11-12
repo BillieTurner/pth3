@@ -12,6 +12,8 @@ import (
 	"sync"
 	"syscall"
 
+	mincer "pth3/internal/mincer"
+
 	"github.com/lucas-clemente/quic-go"
 )
 
@@ -103,7 +105,12 @@ func isPaddingChunk(bs []byte) bool {
 	return bs[0]&0b1 == 1
 }
 
-func pack(bs []byte, size int, key []byte, isVerified bool) []byte {
+func pack(
+	bs []byte,
+	size int,
+	key []byte,
+	isVerified bool,
+) []byte {
 	chunks := chunkSlice(bs, size)
 	var rst []byte
 	var sign []byte
@@ -226,6 +233,14 @@ func CopyLoop(stream quic.Stream, or net.Conn, key []byte) {
 
 	// OR -> PT
 	go func() {
+		mincerClient := mincer.Mincer{
+			MinRate:          0,
+			MaxRate:          10,
+			ChunkSize:        65,
+			MinChunkPerGroup: 4,
+			MaxChunkPerGroup: 12,
+		}
+		mincerClient.Init(nil)
 		// io.Copy(stream, or)
 		buf := make([]byte, buffSize)
 		isVerified := false
@@ -238,9 +253,17 @@ func CopyLoop(stream quic.Stream, or net.Conn, key []byte) {
 
 			data := pack(buf[:size], CHUNK_SIZE, key, isVerified)
 			isVerified = true
-			_, err = stream.Write(data)
-			if err != nil {
-				log.Println("stream write error ", err)
+			exitLoop := false
+			chunks := mincerClient.Run(data)
+			for i := 0; i < len(chunks); i++ {
+				_, err = stream.Write(chunks[i])
+				if err != nil {
+					log.Println("stream write error ", err)
+					exitLoop = true
+					break
+				}
+			}
+			if exitLoop {
 				break
 			}
 		}

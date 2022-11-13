@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"log"
 	"net"
@@ -17,23 +18,13 @@ import (
 	pthelper "pth3/internal/pthelper"
 )
 
+type ClientArgs struct {
+	certPin string
+	hmacKey string
+}
+
 var handlerChan = make(chan int)
-
 var logFile = flag.String("log-file", "", "Path to log file.")
-
-var certificatePin = flag.String(
-	"certificate-pin",
-	"",
-	"SHA2-256 pin of the server certificate, encoded in hex.",
-)
-
-var publicKeyPin = flag.String(
-	"public-key-pin",
-	"",
-	"SHA2-256 pin of the server public key, encoded in hex.",
-)
-
-var hmacKey = flag.String("hmac-key", "", "hmac key")
 
 func matched(b bool) string {
 	if b {
@@ -49,6 +40,21 @@ func hash_hex(b []byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+func parserArgs(args pt.Args) (*ClientArgs, error) {
+	certPin, ok := args.Get("certificate-pin")
+	if !ok || len(certPin) == 0 {
+		return nil, errors.New("certificate pin missing")
+	}
+	hmacKey, ok := args.Get("hmac-key")
+	if !ok || len(hmacKey) == 0 {
+		return nil, errors.New("hmac key missing")
+	}
+	return &ClientArgs{
+		certPin: certPin,
+		hmacKey: hmacKey,
+	}, nil
+}
+
 func handleClient(connection *pt.SocksConn) {
 	handlerChan <- 1
 	defer func() {
@@ -56,6 +62,13 @@ func handleClient(connection *pt.SocksConn) {
 		connection.Close()
 		log.Printf("Ending connection to %s", connection.Req.Target)
 	}()
+
+	args, err := parserArgs(connection.Req.Args)
+	if err != nil {
+		log.Printf("Can't parse args: %s", err)
+		connection.Reject()
+		return
+	}
 
 	tlsConfig := &tls.Config{
 		// Note that we allow an insecure connection to be established, such
@@ -83,46 +96,25 @@ func handleClient(connection *pt.SocksConn) {
 
 	for _, peerCertificate := range state.TLS.PeerCertificates {
 		// Do public key pinning:
-		publicKeyHashHex := hash_hex(peerCertificate.RawSubjectPublicKeyInfo)
+		// publicKeyHashHex := hash_hex(peerCertificate.RawSubjectPublicKeyInfo)
 
 		// Do certificate pinning:
 		certificateHashHex := hash_hex(peerCertificate.Raw)
 
 		// Do pin check.
+		// "SHA2-256 pin of the server public key, encoded in hex."
 		publicKeyPinValid := true
-
-		if *publicKeyPin != "" {
-			if strings.ToLower(
-				*publicKeyPin,
-			) != strings.ToLower(
-				publicKeyHashHex,
-			) {
-				publicKeyPinValid = false
-			}
-			log.Printf(
-				"  Public key:  '%s' %s (SHA2-256)",
-				publicKeyHashHex,
-				matched(publicKeyPinValid),
-			)
-		}
-
+		// 	"SHA2-256 pin of the server certificate, encoded in hex.",
 		certificatePinValid := true
-
-		if *certificatePin != "" {
-			if strings.ToLower(
-				*certificatePin,
-			) != strings.ToLower(
-				certificateHashHex,
-			) {
-				certificatePinValid = false
-			}
-
-			log.Printf(
-				"  Certificate: '%s' %s (SHA2-256)",
-				certificateHashHex,
-				matched(certificatePinValid),
-			)
+		if !strings.EqualFold(args.certPin, certificateHashHex) {
+			certificatePinValid = false
 		}
+
+		log.Printf(
+			"  Certificate: '%s' %s (SHA2-256)",
+			certificateHashHex,
+			matched(certificatePinValid),
+		)
 
 		pinValid = publicKeyPinValid && certificatePinValid
 
@@ -152,7 +144,7 @@ func handleClient(connection *pt.SocksConn) {
 
 	log.Printf("Granting session with %s", session.RemoteAddr())
 	// copyLoop(stream, connection)
-	key, _ := hex.DecodeString(*hmacKey)
+	key, _ := hex.DecodeString(args.hmacKey)
 	pthelper.CopyLoop(stream, connection, key)
 }
 
@@ -160,19 +152,17 @@ func acceptLoop(listener *pt.SocksListener) {
 	defer listener.Close()
 
 	for {
-		connection, err := listener.AcceptSocks()
-
+		conn, err := listener.AcceptSocks()
 		if err != nil {
 			// TODO
 			// netErr, ok := err.(net.Error)
 			// if ok && netErr.Temporary() {
 			// 	continue
 			// }
-
 			return
 		}
 
-		go handleClient(connection)
+		go handleClient(conn)
 	}
 }
 
@@ -192,13 +182,6 @@ func main() {
 
 		log.SetOutput(file)
 		defer file.Close()
-	}
-
-	if *publicKeyPin == "" && *certificatePin == "" {
-		log.Fatalf("Certificate and/or public key pin missing.")
-	}
-	if *hmacKey == "" {
-		log.Fatalf("hmac key missing.")
 	}
 
 	clientInfo, err := pt.ClientSetup(nil)

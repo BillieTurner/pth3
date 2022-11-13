@@ -14,12 +14,17 @@ go build
 ```
 
 
-# Client `torrc` Config
+# Client. method 1: Add PT through `torrc` Config
 ```
 UseBridges 1
-Bridge pth3 <Server IP>:<Server Port>
+Bridge pth3 <Server IP>:<Server Port> public-key-pin <public key fingerprint> hmac-key <hmac key>
 
-ClientTransportPlugin pth3 exec path/to/pth3-client -log-file path/to/pth3-client.log -public-key-pin <public key fingerprint>
+ClientTransportPlugin pth3 exec path/to/pth3-client -log-file path/to/pth3-client.log
+```
+
+# Client. method 2: Add PT through Tor browser's "Add a Bridge Manually..."
+```
+pth3 <Server IP>:<Server Port> public-key-pin <public key fingerprint> hmac-key <hmac key>
 ```
 
 # Server `torrc` Config
